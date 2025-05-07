@@ -1,0 +1,971 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Quản Lý Đề Xuất Mua Sắm</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding-bottom: 50px;
+        }
+        .login-container {
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background-color: #f8f9fa;
+            padding: 15px 0;
+            border-bottom: 1px solid #dee2e6;
+            margin-bottom: 20px;
+        }
+        .pagination-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .pagination-button {
+            margin: 0 5px;
+            padding: 5px 10px;
+            border: 1px solid #dee2e6;
+            background-color: #fff;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .pagination-button.active {
+            background-color: #0d6efd;
+            color: white;
+            border-color: #0d6efd;
+        }
+        .pagination-button:hover:not(.active) {
+            background-color: #e9ecef;
+        }
+        .sort-icon {
+            display: inline-block;
+            width: 0;
+            height: 0;
+            margin-left: 5px;
+            vertical-align: middle;
+            content: "";
+            border-top: 4px solid;
+            border-right: 4px solid transparent;
+            border-bottom: 0;
+            border-left: 4px solid transparent;
+        }
+        .sort-icon.asc {
+            border-top: 0;
+            border-bottom: 4px solid;
+        }
+        th {
+            cursor: pointer;
+            position: relative;
+        }
+        th:hover {
+            background-color: #f8f9fa;
+        }
+        .hidden {
+            display: none;
+        }
+        .table-responsive {
+            overflow-x: auto;
+        }
+        @media print {
+            .no-print {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Modal -->
+    <div class="modal fade" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="loginModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="loginModalLabel">Đăng Nhập Hệ Thống</h5>
+                </div>
+                <div class="modal-body">
+                    <form id="loginForm">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Tên đăng nhập</label>
+                            <input type="text" class="form-control" id="username" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Mật khẩu</label>
+                            <input type="password" class="form-control" id="password" required>
+                        </div>
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary">Đăng nhập</button>
+                        </div>
+                    </form>
+                    <div class="alert alert-danger mt-3 hidden" id="loginError"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Main Content (Hidden until login) -->
+    <div id="mainContent" class="container-fluid hidden">
+        <!-- Header -->
+        <div class="header text-center">
+            <h2 class="fw-bold">Hệ Thống Quản Lý Đề Xuất Mua Sắm</h2>
+            <h4>CÔNG TY CỔ PHẦN 27-7 HỒNG QUANG</h4>
+            <div class="mt-2">
+                <span class="badge bg-primary" id="userBranch">Chi nhánh: </span>
+                <span class="badge bg-info" id="userName">Người dùng: </span>
+                <button class="btn btn-outline-danger btn-sm ms-2" id="logoutBtn">Đăng xuất</button>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="row mb-4 no-print">
+            <div class="col-md-8">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="searchInput" placeholder="Tìm kiếm theo người đề nghị hoặc nội dung...">
+                    <button class="btn btn-outline-secondary" type="button" id="searchBtn">Tìm kiếm</button>
+                    <button class="btn btn-outline-secondary" type="button" id="clearSearchBtn">Xóa tìm kiếm</button>
+                </div>
+            </div>
+            <div class="col-md-4 text-end">
+                <button class="btn btn-success" id="uploadBtn" data-bs-toggle="modal" data-bs-target="#uploadModal">
+                    <i class="bi bi-upload"></i> Tải lên đề xuất
+                </button>
+                <button class="btn btn-info ms-2" id="downloadTemplateBtn">
+                    <i class="bi bi-download"></i> Tải mẫu Excel
+                </button>
+            </div>
+        </div>
+
+        <!-- Admin only buttons -->
+        <div class="row mb-4 admin-only hidden no-print">
+            <div class="col-12 text-end">
+                <button class="btn btn-primary" id="exportXDVBtn">Xuất báo cáo XDV</button>
+                <button class="btn btn-primary ms-2" id="exportPTTBtn">Xuất báo cáo PTT</button>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="table-responsive">
+            <table class="table table-striped table-hover" id="proposalsTable">
+                <thead class="table-dark">
+                    <tr>
+                        <th data-sort="id">STT <span class="sort-icon"></span></th>
+                        <th data-sort="proposer">Người đề nghị <span class="sort-icon"></span></th>
+                        <th data-sort="department">Bộ phận <span class="sort-icon"></span></th>
+                        <th data-sort="date">Ngày tháng <span class="sort-icon"></span></th>
+                        <th data-sort="code">Mã số đề xuất <span class="sort-icon"></span></th>
+                        <th data-sort="proposal">Đề xuất <span class="sort-icon"></span></th>
+                        <th data-sort="content">Nội dung <span class="sort-icon"></span></th>
+                        <th data-sort="supplier">Nhà cung cấp <span class="sort-icon"></span></th>
+                        <th data-sort="estimated_cost">Dự tính <span class="sort-icon"></span></th>
+                        <th data-sort="approved_amount">Số tiền được duyệt <span class="sort-icon"></span></th>
+                        <th data-sort="notes">Ghi chú <span class="sort-icon"></span></th>
+                        <th data-sort="completed">Hoàn thành <span class="sort-icon"></span></th>
+                        <th data-sort="branch">Chi nhánh <span class="sort-icon"></span></th>
+                        <th class="no-print">Hành động</th>
+                    </tr>
+                </thead>
+                <tbody id="proposalsTableBody">
+                    <!-- Data will be filled by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination-container no-print" id="pagination"></div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="editModalLabel">Chỉnh sửa đề xuất</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editForm">
+                        <input type="hidden" id="editProposalId">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="editProposer" class="form-label">Người đề nghị <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="editProposer" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="editDepartment" class="form-label">Bộ phận <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="editDepartment" required>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="editDate" class="form-label">Ngày tháng <span class="text-danger">*</span></label>
+                                <input type="date" class="form-control" id="editDate" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="editCode" class="form-label">Mã số đề xuất</label>
+                                <input type="text" class="form-control" id="editCode">
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="editProposal" class="form-label">Đề xuất <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="editProposal" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="editSupplier" class="form-label">Nhà cung cấp</label>
+                                <input type="text" class="form-control" id="editSupplier">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editContent" class="form-label">Nội dung <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="editContent" rows="3" required></textarea>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="editEstimatedCost" class="form-label">Dự tính</label>
+                                <input type="number" class="form-control" id="editEstimatedCost">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="editApprovedAmount" class="form-label">Số tiền được duyệt</label>
+                                <input type="number" class="form-control" id="editApprovedAmount">
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="editNotes" class="form-label">Ghi chú</label>
+                                <input type="text" class="form-control" id="editNotes">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="editCompleted" class="form-label">Hoàn thành</label>
+                                <select class="form-select" id="editCompleted">
+                                    <option value="">Chưa hoàn thành</option>
+                                    <option value="X">Đã hoàn thành</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editBranch" class="form-label">Chi nhánh <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="editBranch" readonly>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="button" class="btn btn-primary" id="saveEditBtn">Lưu thay đổi</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="uploadModalLabel">Tải lên đề xuất từ Excel</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="uploadForm">
+                        <div class="mb-3">
+                            <label for="excelFile" class="form-label">Chọn file Excel (.xlsx hoặc .xls)</label>
+                            <input type="file" class="form-control" id="excelFile" accept=".xlsx, .xls" required>
+                        </div>
+                        <div class="alert alert-info">
+                            <strong>Lưu ý:</strong> File Excel cần có các cột tương ứng với bảng hiển thị.
+                            Dữ liệu mới sẽ được thêm vào với chi nhánh của bạn.
+                        </div>
+                    </form>
+                    <div class="alert alert-danger mt-3 hidden" id="uploadError"></div>
+                    <div class="alert alert-success mt-3 hidden" id="uploadSuccess"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="button" class="btn btn-success" id="confirmUploadBtn">Tải lên</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title" id="deleteModalLabel">Xác nhận xóa</h rexford">
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Bạn có chắc chắn muốn xóa đề xuất này không?</p>
+                    <p id="deleteModalContent"></p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Xóa</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'https://de-xuat-ea0h.onrender.com/api';
+        let currentUser = null;
+        let proposals = [];
+        let filteredProposals = [];
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        let currentSortColumn = '';
+        let currentSortDirection = 'asc';
+
+        document.addEventListener("DOMContentLoaded", function() {
+            const token = localStorage.getItem('token');
+            if (token) {
+                validateToken(token);
+            } else {
+                showLoginModal();
+            }
+            initEventListeners();
+        });
+
+        function validateToken(token) {
+            axios.get(`${API_URL}/proposals`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+            .then(response => {
+                currentUser = {
+                    username: localStorage.getItem('username'),
+                    branch: localStorage.getItem('branch'),
+                    role: localStorage.getItem('role')
+                };
+                document.getElementById('mainContent').classList.remove('hidden');
+                document.getElementById('userName').textContent = `Người dùng: ${currentUser.username}`;
+                document.getElementById('userBranch').textContent = currentUser.role === 'admin' ? 'Tất cả (Admin)' : `Chi nhánh: ${currentUser.branch}`;
+                document.querySelectorAll('.admin-only').forEach(el => {
+                    el.classList.toggle('hidden', currentUser.role !== 'admin');
+                });
+                loadProposalData();
+            })
+            .catch(error => {
+                localStorage.clear();
+                showLoginModal();
+            });
+        }
+
+        function showLoginModal() {
+            document.getElementById('mainContent').classList.add('hidden');
+            document.getElementById('loginForm').reset();
+            document.getElementById('loginError').classList.add('hidden');
+            const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+            loginModal.show();
+        }
+
+        function initEventListeners() {
+            document.getElementById('loginForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                handleLogin();
+            });
+
+            document.getElementById('logoutBtn').addEventListener('click', function() {
+                localStorage.clear();
+                currentUser = null;
+                showLoginModal();
+            });
+
+            document.getElementById('searchBtn').addEventListener('click', function() {
+                applySearch();
+            });
+
+            document.getElementById('clearSearchBtn').addEventListener('click', function() {
+                document.getElementById('searchInput').value = '';
+                applySearch();
+            });
+
+            document.querySelectorAll('th[data-sort]').forEach(th => {
+                th.addEventListener('click', function() {
+                    sortTable(this.getAttribute('data-sort'));
+                });
+            });
+
+            document.getElementById('confirmUploadBtn').addEventListener('click', function() {
+                handleExcelUpload();
+            });
+
+            document.getElementById('saveEditBtn').addEventListener('click', function() {
+                saveEditChanges();
+            });
+
+            document.getElementById('downloadTemplateBtn').addEventListener('click', function() {
+                downloadExcelTemplate();
+            });
+
+            document.getElementById('exportXDVBtn').addEventListener('click', function() {
+                exportSummaryReport('XDV');
+            });
+
+            document.getElementById('exportPTTBtn').addEventListener('click', function() {
+                exportSummaryReport('PTT');
+            });
+
+            document.getElementById('confirmDeleteBtn').addEventListener('click', function() {
+                const proposalId = parseInt(this.getAttribute('data-id'));
+                if (!isNaN(proposalId)) {
+                    deleteProposal(proposalId);
+                }
+            });
+        }
+
+        function handleLogin() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            axios.post(`${API_URL}/login`, { username, password })
+                .then(response => {
+                    localStorage.setItem('token', response.data.token);
+                    localStorage.setItem('username', username);
+                    localStorage.setItem('branch', response.data.branch);
+                    localStorage.setItem('role', response.data.role);
+                    currentUser = {
+                        username: username,
+                        branch: response.data.branch,
+                        role: response.data.role
+                    };
+                    const loginModal = bootstrap.Modal.getInstance(document.getElementById('loginModal'));
+                    loginModal.hide();
+                    document.getElementById('mainContent').classList.remove('hidden');
+                    document.getElementById('userName').textContent = `Người dùng: ${username}`;
+                    document.getElementById('userBranch').textContent = response.data.role === 'admin' ? 'Tất cả (Admin)' : `Chi nhánh: ${response.data.branch}`;
+                    document.querySelectorAll('.admin-only').forEach(el => {
+                        el.classList.toggle('hidden', response.data.role !== 'admin');
+                    });
+                    loadProposalData();
+                })
+                .catch(error => {
+                    showLoginError(error.response?.data?.error || 'Lỗi đăng nhập!');
+                });
+        }
+
+        function showLoginError(message) {
+            const errorElement = document.getElementById('loginError');
+            errorElement.textContent = message;
+            errorElement.classList.remove('hidden');
+        }
+
+        function loadProposalData() {
+            const token = localStorage.getItem('token');
+            axios.get(`${API_URL}/proposals`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+                .then(response => {
+                    proposals = response.data;
+                    filteredProposals = [...proposals];
+                    sortData();
+                    renderTable();
+                    renderPagination();
+                })
+                .catch(error => {
+                    alert('Lỗi khi tải dữ liệu: ' + (error.response?.data?.error || 'Unknown error'));
+                    localStorage.clear();
+                    showLoginModal();
+                });
+        }
+
+        function renderTable() {
+            const tableBody = document.getElementById('proposalsTableBody');
+            tableBody.innerHTML = '';
+            
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, filteredProposals.length);
+            const currentPageData = filteredProposals.slice(startIndex, endIndex);
+            
+            if (currentPageData.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="14" class="text-center">Không có dữ liệu</td></tr>`;
+                return;
+            }
+            
+            currentPageData.forEach((proposal, index) => {
+                const row = document.createElement('tr');
+                const formatCurrency = (value) => value ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value) : '';
+                row.innerHTML = `
+                    <td>${proposal.id}</td>
+                    <td>${sanitizeHTML(proposal.proposer || '')}</td>
+                    <td>${sanitizeHTML(proposal.department || '')}</td>
+                    <td>${proposal.date ? new Date(proposal.date).toLocaleDateString('vi-VN') : ''}</td>
+                    <td>${sanitizeHTML(proposal.code || '')}</td>
+                    <td>${sanitizeHTML(proposal.proposal || '')}</td>
+                    <td>${sanitizeHTML(proposal.content || '')}</td>
+                    <td>${sanitizeHTML(proposal.supplier || '')}</td>
+                    <td>${formatCurrency(proposal.estimated_cost)}</td>
+                    <td>${formatCurrency(proposal.approved_amount)}</td>
+                    <td>${sanitizeHTML(proposal.notes || '')}</td>
+                    <td>${proposal.completed || ''}</td>
+                    <td>${sanitizeHTML(proposal.branch || '')}</td>
+                    <td class="no-print">
+                        <button class="btn btn-primary btn-sm edit-btn" data-id="${proposal.id}" aria-label="Edit proposal details">
+                            <i class="bi bi-pencil"></i> Sửa
+                        </button>
+                        <button class="btn btn-danger btn-sm delete-btn ms-1" data-id="${proposal.id}" aria-label="Delete proposal">
+                            <i class="bi bi-trash"></i> Xóa
+                        </button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+                
+                row.querySelector('.edit-btn').addEventListener('click', () => openEditModal(proposal.id));
+                row.querySelector('.delete-btn').addEventListener('click', () => openDeleteModal(proposal.id));
+            });
+        }
+
+        function renderPagination() {
+            const paginationContainer = document.getElementById('pagination');
+            paginationContainer.innerHTML = '';
+            const totalPages = Math.ceil(filteredProposals.length / itemsPerPage);
+            
+            if (totalPages <= 1) return;
+            
+            const prevButton = document.createElement('button');
+            prevButton.classList.add('pagination-button');
+            prevButton.innerHTML = '&laquo;';
+            prevButton.disabled = currentPage === 1;
+            prevButton.addEventListener('click', () => {
+                if (currentPage > 1) {
+                    currentPage--;
+                    renderTable();
+                    renderPagination();
+                }
+            });
+            paginationContainer.appendChild(prevButton);
+            
+            for (let i = 1; i <= totalPages; i++) {
+                const pageButton = document.createElement('button');
+                pageButton.classList.add('pagination-button');
+                if (i === currentPage) pageButton.classList.add('active');
+                pageButton.textContent = i;
+                pageButton.addEventListener('click', () => {
+                    currentPage = i;
+                    renderTable();
+                    renderPagination();
+                });
+                paginationContainer.appendChild(pageButton);
+            }
+            
+            const nextButton = document.createElement('button');
+            nextButton.classList.add('pagination-button');
+            nextButton.innerHTML = '&raquo;';
+            nextButton.disabled = currentPage === totalPages;
+            nextButton.addEventListener('click', () => {
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    renderTable();
+                    renderPagination();
+                }
+            });
+            paginationContainer.appendChild(nextButton);
+        }
+
+        function applySearch() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            filteredProposals = proposals.filter(proposal => {
+                return (
+                    (proposal.proposer || '').toLowerCase().includes(searchTerm) ||
+                    (proposal.content || '').toLowerCase().includes(searchTerm) ||
+                    (proposal.proposal || '').toLowerCase().includes(searchTerm)
+                );
+            });
+            currentPage = 1;
+            renderTable();
+            renderPagination();
+        }
+
+        function sortTable(column) {
+            if (currentSortColumn === column) {
+                currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortColumn = column;
+                currentSortDirection = 'asc';
+            }
+            
+            document.querySelectorAll('th[data-sort] .sort-icon').forEach(icon => {
+                icon.className = 'sort-icon';
+            });
+            const currentIcon = document.querySelector(`th[data-sort="${column}"] .sort-icon`);
+            if (currentIcon) {
+                if (currentSortDirection === 'asc') {
+                    currentIcon.classList.add('asc');
+                } else {
+                    currentIcon.classList.remove('asc');
+                }
+            }
+            
+            sortData();
+            renderTable();
+        }
+
+        function sortData() {
+            if (!currentSortColumn) return;
+            
+            filteredProposals.sort((a, b) => {
+                let valueA = a[currentSortColumn];
+                let valueB = b[currentSortColumn];
+                
+                if (typeof valueA === 'string' && typeof valueB === 'string') {
+                    valueA = valueA.toLowerCase();
+                    valueB = valueB.toLowerCase();
+                }
+                
+                if (currentSortColumn === "date") {
+                    valueA = new Date(valueA);
+                    valueB = new Date(valueB);
+                }
+                
+                valueA = valueA === undefined || valueA === null || valueA === '' ? '' : valueA;
+                valueB = valueB === undefined || valueB === null || valueB === '' ? '' : valueB;
+                
+                if (currentSortDirection === 'asc') {
+                    return valueA > valueB ? 1 : valueA < valueB ? -1 : 0;
+                } else {
+                    return valueA < valueB ? 1 : valueA > valueB ? -1 : 0;
+                }
+            });
+        }
+
+        function openEditModal(proposalId) {
+            const token = localStorage.getItem('token');
+            axios.get(`${API_URL}/proposals`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+                .then(response => {
+                    const proposal = response.data.find(p => p.id === proposalId);
+                    if (!proposal) {
+                        alert('Đề xuất không tồn tại!');
+                        return;
+                    }
+                    if (currentUser.role !== 'admin' && proposal.branch !== currentUser.branch) {
+                        alert(`Bạn không có quyền chỉnh sửa đề xuất từ chi nhánh ${proposal.branch}!`);
+                        return;
+                    }
+                    document.getElementById('editProposalId').value = proposal.id;
+                    document.getElementById('editProposer').value = proposal.proposer || '';
+                    document.getElementById('editDepartment').value = proposal.department || '';
+                    document.getElementById('editDate').value = proposal.date || '';
+                    document.getElementById('editCode').value = proposal.code || '';
+                    document.getElementById('editProposal').value = proposal.proposal || '';
+                    document.getElementById('editContent').value = proposal.content || '';
+                    document.getElementById('editSupplier').value = proposal.supplier || '';
+                    document.getElementById('editEstimatedCost').value = proposal.estimated_cost || '';
+                    document.getElementById('editApprovedAmount').value = proposal.approved_amount || '';
+                    document.getElementById('editNotes').value = proposal.notes || '';
+                    document.getElementById('editCompleted').value = proposal.completed || '';
+                    document.getElementById('editBranch').value = proposal.branch || '';
+                    const editModal = new bootstrap.Modal(document.getElementById('editModal'));
+                    editModal.show();
+                })
+                .catch(error => {
+                    alert('Lỗi khi tải đề xuất: ' + (error.response?.data?.error || 'Unknown error'));
+                });
+        }
+
+        function saveEditChanges() {
+            const form = document.getElementById('editForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+            
+            const proposalId = parseInt(document.getElementById('editProposalId').value);
+            const updatedProposal = {
+                proposer: document.getElementById('editProposer').value,
+                department: document.getElementById('editDepartment').value,
+                date: document.getElementById('editDate').value,
+                code: document.getElementById('editCode').value,
+                proposal: document.getElementById('editProposal').value,
+                content: document.getElementById('editContent').value,
+                supplier: document.getElementById('editSupplier').value,
+                estimated_cost: parseFloat(document.getElementById('editEstimatedCost').value) || 0,
+                approved_amount: parseFloat(document.getElementById('editApprovedAmount').value) || 0,
+                notes: document.getElementById('editNotes').value,
+                completed: document.getElementById('editCompleted').value
+            };
+            
+            const token = localStorage.getItem('token');
+            axios.put(`${API_URL}/proposals/${proposalId}`, updatedProposal, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+                .then(() => {
+                    const editModal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
+                    editModal.hide();
+                    alert('Đã cập nhật đề xuất!');
+                    loadProposalData();
+                })
+                .catch(error => {
+                    alert('Lỗi khi cập nhật: ' + (error.response?.data?.error || 'Unknown error'));
+                });
+        }
+
+        function openDeleteModal(proposalId) {
+            const token = localStorage.getItem('token');
+            axios.get(`${API_URL}/proposals`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+                .then(response => {
+                    const proposal = response.data.find(p => p.id === proposalId);
+                    if (!proposal) {
+                        alert('Đề xuất không tồn tại!');
+                        return;
+                    }
+                    if (currentUser.role !== 'admin' && proposal.branch !== currentUser.branch) {
+                        alert(`Bạn không có quyền xóa đề xuất từ chi nhánh ${proposal.branch}!`);
+                        return;
+                    }
+                    document.getElementById('deleteModalContent').innerHTML = `
+                        <strong>Người đề nghị:</strong> ${sanitizeHTML(proposal.proposer || '')}<br>
+                        <strong>Đề xuất:</strong> ${sanitizeHTML(proposal.proposal || '')}<br>
+                        <strong>Nội dung:</strong> ${sanitizeHTML(proposal.content || '')}<br>
+                        <strong>Chi nhánh:</strong> ${sanitizeHTML(proposal.branch || '')}
+                    `;
+                    document.getElementById('confirmDeleteBtn').setAttribute('data-id', proposalId);
+                    const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+                    deleteModal.show();
+                })
+                .catch(error => {
+                    alert('Lỗi khi tải đề xuất: ' + (error.response?.data?.error || 'Unknown error'));
+                });
+        }
+
+        function deleteProposal(proposalId) {
+            const token = localStorage.getItem('token');
+            axios.delete(`${API_URL}/proposals/${proposalId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+                .then(() => {
+                    const deleteModal = bootstrap.Modal.getInstance(document.getElementById('deleteModal'));
+                    deleteModal.hide();
+                    alert('Đã xóa đề xuất!');
+                    loadProposalData();
+                })
+                .catch(error => {
+                    alert('Lỗi khi xóa: ' + (error.response?.data?.error || 'Unknown error'));
+                });
+        }
+
+        function handleExcelUpload() {
+            if (currentUser.role === 'admin') {
+                showUploadError("Admin không thể tải lên đề xuất. Vui lòng sử dụng tài khoản nhân sự chi nhánh.");
+                return;
+            }
+            
+            const fileInput = document.getElementById('excelFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showUploadError("Vui lòng chọn file Excel!");
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                    
+                    if (jsonData.length < 2) {
+                        showUploadError("File không chứa dữ liệu hoặc không đúng định dạng!");
+                        return;
+                    }
+                    
+                    const headers = jsonData[0];
+                    const requiredColumns = ["NGƯỜI ĐỀ NGHỊ", "BỘ PHẬN", "NGÀY THÁNG", "ĐỀ XUẤT", "NỘI DUNG"];
+                    const missingColumns = requiredColumns.filter(col => !headers.includes(col));
+                    
+                    if (missingColumns.length > 0) {
+                        showUploadError(`File thiếu các cột bắt buộc: ${missingColumns.join(', ')}`);
+                        return;
+                    }
+                    
+                    const token = localStorage.getItem('token');
+                    const newProposals = [];
+                    for (let i = 1; i < jsonData.length; i++) {
+                        const row = jsonData[i];
+                        if (row.length === 0 || row.every(cell => cell === null || cell === undefined || cell === '')) {
+                            continue;
+                        }
+                        
+                        const proposal = {};
+                        headers.forEach((header, index) => {
+                            if (index < row.length) {
+                                proposal[header] = row[index];
+                            }
+                        });
+                        
+                        const formattedProposal = {
+                            proposer: proposal["NGƯỜI ĐỀ NGHỊ"] || '',
+                            department: proposal["BỘ PHẬN"] || '',
+                            date: proposal["NGÀY THÁNG"] || '',
+                            code: proposal["MÃ SỐ ĐỀ XUẤT"] || '',
+                            proposal: proposal["ĐỀ XUẤT"] || '',
+                            content: proposal["NỘI DUNG"] || '',
+                            supplier: proposal["NHÀ CUNG CẤP"] || '',
+                            estimated_cost: parseFloat(proposal["DỰ TÍNH"]) || 0,
+                            approved_amount: parseFloat(proposal["SỐ TIỀN ĐƯỢC DUYỆT"]) || 0,
+                            notes: proposal["GHI CHÚ"] || '',
+                            completed: proposal["HOÀN THÀNH"] || '',
+                            branch: currentUser.branch
+                        };
+                        
+                        newProposals.push(axios.post(`${API_URL}/proposals`, formattedProposal, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        }));
+                    }
+                    
+                    Promise.all(newProposals)
+                        .then(() => {
+                            showUploadSuccess(`Đã tải lên thành công ${newProposals.length} đề xuất mới từ chi nhánh ${currentUser.branch}!`);
+                            fileInput.value = '';
+                            loadProposalData();
+                        })
+                        .catch(error => {
+                            showUploadError('Lỗi khi tải lên đề xuất: ' + (error.response?.data?.error || 'Unknown error'));
+                        });
+                } catch (error) {
+                    showUploadError("Lỗi khi xử lý file Excel: " + error.message);
+                }
+            };
+            
+            reader.onerror = function() {
+                showUploadError("Lỗi khi đọc file!");
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+
+        function showUploadError(message) {
+            const errorElement = document.getElementById('uploadError');
+            const successElement = document.getElementById('uploadSuccess');
+            errorElement.textContent = message;
+            errorElement.classList.remove('hidden');
+            successElement.classList.add('hidden');
+        }
+
+        function showUploadSuccess(message) {
+            const errorElement = document.getElementById('uploadError');
+            const successElement = document.getElementById('uploadSuccess');
+            successElement.textContent = message;
+            successElement.classList.remove('hidden');
+            errorElement.classList.add('hidden');
+            setTimeout(() => {
+                const uploadModal = bootstrap.Modal.getInstance(document.getElementById('uploadModal'));
+                uploadModal.hide();
+            }, 2000);
+        }
+
+        function downloadExcelTemplate() {
+            const wb = XLSX.utils.book_new();
+            const headers = [
+                "NGƯỜI ĐỀ NGHỊ", "BỘ PHẬN", "NGÀY THÁNG", "MÃ SỐ ĐỀ XUẤT", "ĐỀ XUẤT", 
+                "NỘI DUNG", "NHÀ CUNG CẤP", "DỰ TÍNH", "SỐ TIỀN ĐƯỢC DUYỆT", "GHI CHÚ", "HOÀN THÀNH"
+            ];
+            const sampleData = [
+                headers,
+                ["Nguyễn Văn A", "KD", new Date().toISOString().split('T')[0], "", "Mua laptop", "Mua laptop phục vụ công việc", "Công ty ABC", 15000000, 0, "", ""],
+                ["Trần Thị B", "HCNS", new Date().toISOString().split('T')[0], "", "Mua máy in", "Mua máy in phục vụ văn phòng", "Công ty XYZ", 5000000, 0, "", ""]
+            ];
+            const ws = XLSX.utils.aoa_to_sheet(sampleData);
+            XLSX.utils.book_append_sheet(wb, ws, "Template");
+            XLSX.writeFile(wb, "DE_XUAT_THANH_TOAN_TEMPLATE.xlsx");
+        }
+
+        function exportSummaryReport(branchType) {
+            const token = localStorage.getItem('token');
+            axios.get(`${API_URL}/proposals`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+                .then(response => {
+                    const filteredData = response.data.filter(p => p.branch.startsWith(branchType));
+                    if (filteredData.length === 0) {
+                        alert(`Không có dữ liệu từ các chi nhánh ${branchType} để xuất báo cáo!`);
+                        return;
+                    }
+                    const wb = XLSX.utils.book_new();
+                    const headers = [
+                        "STT", "NGƯỜI ĐỀ NGHỊ", "BỘ PHẬN", "NGÀY THÁNG", "MÃ SỐ ĐỀ XUẤT", "ĐỀ XUẤT", 
+                        "NỘI DUNG", "NHÀ CUNG CẤP", "DỰ TÍNH", "SỐ TIỀN ĐƯỢC DUYỆT", "GHI CHÚ", 
+                        "HOÀN THÀNH", "CHI NHÁNH"
+                    ];
+                    const data = [headers];
+                    filteredData.forEach((item, index) => {
+                        data.push([
+                            index + 1, item.proposer || '', item.department || '', item.date || '',
+                            item.code || '', item.proposal || '', item.content || '', item.supplier || '',
+                            item.estimated_cost || 0, item.approved_amount || 0, item.notes || '',
+                            item.completed || '', item.branch || ''
+                        ]);
+                    });
+                    const totalEstimated = filteredData.reduce((sum, item) => sum + (item.estimated_cost || 0), 0);
+                    const totalApproved = filteredData.reduce((sum, item) => sum + (item.approved_amount || 0), 0);
+                    data.push([]);
+                    data.push(["TỔNG CỘNG", "", "", "", "", "", "", "", totalEstimated, totalApproved, "", "", ""]);
+                    const ws = XLSX.utils.aoa_to_sheet(data);
+                    XLSX.utils.book_append_sheet(wb, ws, `Báo cáo ${branchType}`);
+                    XLSX.writeFile(wb, `BAO_CAO_${branchType}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                })
+                .catch(error => {
+                    alert('Lỗi khi xuất báo cáo: ' + (error.response?.data?.error || 'Unknown error'));
+                });
+        }
+
+        function sanitizeHTML(text) {
+            const element = document.createElement('div');
+            element.innerText = text;
+            return element.innerHTML;
+        }
+    </script>
+</body>
+</html>
